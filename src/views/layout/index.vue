@@ -1,12 +1,9 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Monitor, EditPen, SwitchButton } from '@element-plus/icons-vue'
-import { useRoute, useRouter } from 'vue-router'
+import { Monitor } from '@element-plus/icons-vue'
+import { useRoute } from 'vue-router'
 
-const router = useRouter()
 const route = useRoute()
-
 const loginName = ref('')
 
 const activeMenu = computed(() => {
@@ -19,25 +16,6 @@ onMounted(() => {
     loginName.value = loginUser.name
   }
 })
-
-function openChangePwd() {
-  ElMessage.info('当前界面已精简，如需保留修改密码功能可再接回原接口')
-}
-
-function logout() {
-  ElMessageBox.confirm('确认退出登录吗？', '提示', {
-    confirmButtonText: '确认',
-    cancelButtonText: '取消',
-    type: 'warning'
-  })
-    .then(() => {
-      localStorage.removeItem('loginUser')
-      localStorage.removeItem('token')
-      ElMessage.success('已退出登录')
-      router.push('/login')
-    })
-    .catch(() => {})
-}
 </script>
 
 <template>
@@ -48,7 +26,7 @@ function logout() {
           <div class="brand-mark">EEG</div>
           <div class="brand-copy">
             <strong>综合监测平台</strong>
-            <span>脑电 · 微表情 · 预警</span>
+            <span>脑电 / 微表情 / 预警</span>
           </div>
         </div>
 
@@ -71,17 +49,6 @@ function logout() {
         <el-header class="topbar">
           <div class="page-title">
             <h1>脑电与微表情综合监测</h1>
-          </div>
-
-          <div class="topbar-actions">
-            <el-button plain @click="openChangePwd">
-              <el-icon><EditPen /></el-icon>
-              修改密码
-            </el-button>
-            <el-button type="danger" plain @click="logout">
-              <el-icon><SwitchButton /></el-icon>
-              退出登录
-            </el-button>
           </div>
         </el-header>
 
@@ -193,9 +160,7 @@ function logout() {
 
 .topbar {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 16px;
   padding: 20px 28px;
   background: rgba(255, 255, 255, 0.72);
   backdrop-filter: blur(14px);
@@ -206,16 +171,6 @@ function logout() {
   margin: 0;
   font-size: 28px;
   color: #17384d;
-}
-
-.page-title p {
-  margin: 6px 0 0;
-  color: #6b7f8f;
-}
-
-.topbar-actions {
-  display: flex;
-  gap: 12px;
 }
 
 .main-panel {
@@ -233,13 +188,7 @@ function logout() {
   }
 
   .topbar {
-    flex-direction: column;
     align-items: flex-start;
-  }
-
-  .topbar-actions {
-    width: 100%;
-    flex-wrap: wrap;
   }
 }
 </style>

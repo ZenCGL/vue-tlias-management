@@ -20,8 +20,7 @@ const {
   beforeVideoUpload,
   uploadFaceVideo,
   getWarningText,
-  getAlertType,
-  formatPercent
+  getAlertType
 } = useMonitorCenter()
 
 useMonitorCenterPage()
@@ -33,11 +32,19 @@ function getPortText(workerId) {
 }
 
 function formatBand(value) {
-  return Number(value || 0).toLocaleString('zh-CN')
+  return `${Number(value || 0).toFixed(1)}%`
 }
 
 function getEmotionText(bindingValue) {
   return bindingValue?.emotionZh || '正常'
+}
+
+function getReviewText(bindingValue) {
+  return bindingValue?.faceStopRequired ? '建议复核' : '继续观察'
+}
+
+function getFaceStatusTone(bindingValue) {
+  return bindingValue?.faceConnected ? '已接入' : '未接入'
 }
 </script>
 
@@ -138,16 +145,16 @@ function getEmotionText(bindingValue) {
 
         <div class="result-grid">
           <div class="metric-box">
-            <span>识别情绪</span>
-            <strong>{{ binding.faceEmotion }}</strong>
+            <span>接入状态</span>
+            <strong>{{ getFaceStatusTone(binding) }}</strong>
           </div>
           <div class="metric-box">
-            <span>单次置信度</span>
-            <strong>{{ binding.faceScore }}</strong>
+            <span>疲劳等级</span>
+            <strong>{{ binding.faceRank ?? '--' }}</strong>
           </div>
           <div class="metric-box">
-            <span>综合准确率</span>
-            <strong>{{ binding.faceRate }}</strong>
+            <span>辅助建议</span>
+            <strong>{{ getReviewText(binding) }}</strong>
           </div>
           <div class="metric-box">
             <span>视频分辨率</span>
@@ -168,10 +175,6 @@ function getEmotionText(bindingValue) {
 
         <div class="signal-strip">
           <div class="signal-item">
-            <span>信号质量</span>
-            <strong>{{ formatPercent(100 - binding.signalQuality) }}</strong>
-          </div>
-          <div class="signal-item">
             <span>情绪预警</span>
             <strong>{{ getEmotionText(binding) }}</strong>
           </div>
@@ -188,23 +191,23 @@ function getEmotionText(bindingValue) {
 
         <div class="band-grid">
           <div class="metric-box">
-            <span>Theta 波</span>
+            <span>Theta 占比</span>
             <strong>{{ formatBand(binding.bandSnapshot.theta) }}</strong>
           </div>
           <div class="metric-box">
-            <span>Alpha 波</span>
+            <span>Alpha 占比</span>
             <strong>{{ formatBand(binding.bandSnapshot.alpha) }}</strong>
           </div>
           <div class="metric-box">
-            <span>Beta 波</span>
+            <span>Beta 占比</span>
             <strong>{{ formatBand(binding.bandSnapshot.beta) }}</strong>
           </div>
           <div class="metric-box">
-            <span>Delta 波</span>
+            <span>Delta 占比</span>
             <strong>{{ formatBand(binding.bandSnapshot.delta) }}</strong>
           </div>
           <div class="metric-box">
-            <span>Gamma 波</span>
+            <span>Gamma 占比</span>
             <strong>{{ formatBand(binding.bandSnapshot.gamma) }}</strong>
           </div>
         </div>

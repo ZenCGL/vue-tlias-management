@@ -8,12 +8,21 @@ import { queryPersonnelApi } from '@/api/personnel'
 
 const DEVICE_OPTIONS = [{ label: '设备 1 / COM3', value: 1 }]
 const RAW_WAVE_LIMIT = 512
+const WAVE_SMOOTH_WINDOW = 5
+const WAVE_DISPLAY_RANGE = 100
 
 const PERSONNEL_FALLBACK = [
   { id: 'P001', uid: 'P001', name: '张三', type: '值班员' },
   { id: 'P002', uid: 'P002', name: '李四', type: '巡检员' },
   { id: 'P003', uid: 'P003', name: '王五', type: '监护员' }
 ]
+const EMOTION_TEXT = {
+  normal: '正常',
+  anxiety: '焦虑',
+  stress: '紧张',
+  fatigue: '疲劳',
+  weakness: '虚弱'
+}
 
 const state = reactive({
   initialized: false,
@@ -24,7 +33,7 @@ const state = reactive({
 
 const chartRefs = new Map()
 const chartInstances = new Map()
-const streamControllers = new Map()
+const workerStreams = new Map()
 
 let stompClient = null
 let stompSocket = null
@@ -38,11 +47,11 @@ function createBinding(seed = 1) {
     personName: '',
     personType: '',
     workerId: DEVICE_OPTIONS[(seed - 1) % DEVICE_OPTIONS.length].value,
+    activeWorkerId: null,
     faceChannelId: `face_${Date.now()}_${seed}`,
     eegRunning: false,
     eegStatus: 'idle',
     eegStatusText: '待接入',
-    signalQuality: 0,
     emotion: 'normal',
     emotionZh: '正常',
     analysisTime: '',
@@ -62,6 +71,7 @@ function createBinding(seed = 1) {
       gamma: 0
     },
     rawWaveBuffer: [],
+    waveScale: 1,
     faceConnected: false,
     faceStatusText: '待上传',
     faceEmotion: '未识别',
@@ -148,18 +158,59 @@ function formatShortTime(value) {
 }
 
 function getBandSnapshot(rawPowers = {}) {
-  return {
-    delta: Number(rawPowers.delta || 0),
-    theta: Number(rawPowers.theta || 0),
-    alpha: Number(rawPowers.low_alpha || 0) + Number(rawPowers.high_alpha || 0),
-    beta: Number(rawPowers.low_beta || 0) + Number(rawPowers.high_beta || 0),
-    gamma: Number(rawPowers.low_gamma || 0) + Number(rawPowers.mid_gamma || 0)
+  const delta = Number(rawPowers.delta || 0)
+  const theta = Number(rawPowers.theta || 0)
+  const alpha = Number(rawPowers.low_alpha || 0) + Number(rawPowers.high_alpha || 0)
+  const beta = Number(rawPowers.low_beta || 0) + Number(rawPowers.high_beta || 0)
+  const gamma = Number(rawPowers.low_gamma || 0) + Number(rawPowers.mid_gamma || 0)
+  const total = delta + theta + alpha + beta + gamma
+
+  if (!total) {
+    return { delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 }
   }
+
+  return {
+    delta: (delta / total) * 100,
+    theta: (theta / total) * 100,
+    alpha: (alpha / total) * 100,
+    beta: (beta / total) * 100,
+    gamma: (gamma / total) * 100
+  }
+}
+
+function smoothWaveSamples(samples) {
+  return samples.map((_, index) => {
+    const start = Math.max(0, index - WAVE_SMOOTH_WINDOW + 1)
+    const window = samples.slice(start, index + 1)
+    const total = window.reduce((sum, value) => sum + value, 0)
+    return total / window.length
+  })
+}
+
+function normalizeWaveChunk(binding, rawWave = []) {
+  const numericSamples = rawWave
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value))
+
+  if (!numericSamples.length) return []
+
+  const smoothed = smoothWaveSamples(numericSamples)
+  const mean = smoothed.reduce((sum, value) => sum + value, 0) / smoothed.length
+  const centered = smoothed.map((value) => value - mean)
+  const peak = centered.reduce((max, value) => Math.max(max, Math.abs(value)), 0)
+
+  if (!peak) return centered.map(() => 0)
+
+  binding.waveScale = binding.waveScale > 0 ? binding.waveScale * 0.82 + peak * 0.18 : peak
+  const scale = Math.max(binding.waveScale, 1)
+
+  return centered.map((value) => Number((Math.tanh((value / scale) * 1.6) * WAVE_DISPLAY_RANGE).toFixed(2)))
 }
 
 function setChartRef(bindingId) {
   return (el) => {
     if (!el) {
+      disposeChart(bindingId)
       chartRefs.delete(bindingId)
       return
     }
@@ -174,6 +225,11 @@ function ensureChart(binding) {
   if (!el) return
 
   let instance = chartInstances.get(binding.id)
+  if (instance && instance.getDom() !== el) {
+    instance.dispose()
+    chartInstances.delete(binding.id)
+    instance = null
+  }
   if (!instance) {
     instance = echarts.init(el)
     chartInstances.set(binding.id, instance)
@@ -191,8 +247,8 @@ function ensureChart(binding) {
     },
     yAxis: {
       type: 'value',
-      min: 'dataMin',
-      max: 'dataMax',
+      min: -WAVE_DISPLAY_RANGE,
+      max: WAVE_DISPLAY_RANGE,
       axisLine: { show: false },
       splitLine: { lineStyle: { color: '#e6eef2' } }
     },
@@ -201,10 +257,10 @@ function ensureChart(binding) {
         name: '脑电波形',
         type: 'line',
         showSymbol: false,
-        smooth: false,
+        smooth: true,
         sampling: 'lttb',
         animation: false,
-        lineStyle: { width: 1.4 },
+        lineStyle: { width: 2 },
         data: [...binding.rawWaveBuffer]
       }
     ]
@@ -222,8 +278,8 @@ function refreshChart(binding) {
   instance.setOption({
     xAxis: { data: binding.rawWaveBuffer.map((_, index) => index) },
     yAxis: {
-      min: 'dataMin',
-      max: 'dataMax'
+      min: -WAVE_DISPLAY_RANGE,
+      max: WAVE_DISPLAY_RANGE
     },
     series: [{ data: [...binding.rawWaveBuffer] }]
   })
@@ -239,9 +295,7 @@ function disposeChart(bindingId) {
 
 function appendRawWave(binding, rawWave = []) {
   if (!Array.isArray(rawWave) || rawWave.length === 0) return
-  const samples = rawWave
-    .map((value) => Number(value))
-    .filter((value) => Number.isFinite(value))
+  const samples = normalizeWaveChunk(binding, rawWave)
   if (!samples.length) return
   binding.rawWaveBuffer.push(...samples)
   if (binding.rawWaveBuffer.length > RAW_WAVE_LIMIT) {
@@ -251,10 +305,9 @@ function appendRawWave(binding, rawWave = []) {
 
 function updateEegData(binding, payload) {
   binding.eegStatus = payload.status || 'ok'
-  binding.signalQuality = Number(payload.signal_quality || 0)
   binding.analysisTime = payload.analysis_time || ''
   binding.emotion = payload.emotion || 'normal'
-  binding.emotionZh = payload.emotion_zh || '正常'
+  binding.emotionZh = EMOTION_TEXT[binding.emotion] || payload.emotion_zh || '正常'
   binding.indices = {
     anxiety_idx: Number(payload.indices?.anxiety_idx || 0),
     stress_idx: Number(payload.indices?.stress_idx || 0),
@@ -268,8 +321,6 @@ function updateEegData(binding, payload) {
 
   if (payload.status === 'calibrating') {
     binding.eegStatusText = `基线校准 ${Math.round(binding.calibrationProgress * 100)}%`
-  } else if (payload.status === 'bad_signal') {
-    binding.eegStatusText = '信号较差'
   } else {
     binding.eegStatusText = '在线'
   }
@@ -278,25 +329,40 @@ function updateEegData(binding, payload) {
   evaluateWarning(binding)
 }
 
-async function startEeg(binding) {
-  if (!binding.personId) {
-    ElMessage.warning('请先选择人员')
-    return
-  }
-
-  stopEeg(binding.id)
-  updateBindingPerson(binding)
-
-  const controller = new AbortController()
-  streamControllers.set(binding.id, controller)
-  binding.eegRunning = true
-  binding.eegStatus = 'connecting'
-  binding.eegStatusText = '连接中'
+function resetWaveState(binding) {
   binding.rawWaveBuffer = []
+  binding.waveScale = 1
   refreshChart(binding)
+}
+
+function getWorkerStream(workerId) {
+  return workerStreams.get(workerId)
+}
+
+function setWorkerBindingsStopped(workerId) {
+  state.bindings.forEach((item) => {
+    if (item.activeWorkerId === workerId) {
+      item.eegRunning = false
+      item.activeWorkerId = null
+      if (item.eegStatus !== 'idle') {
+        item.eegStatusText = '已断开'
+      }
+    }
+  })
+}
+
+async function openWorkerStream(workerId) {
+  const controller = new AbortController()
+  const streamState = {
+    workerId,
+    controller,
+    bindingIds: new Set(),
+    lastPayload: null
+  }
+  workerStreams.set(workerId, streamState)
 
   try {
-    const response = await fetch(`/eeg/stream?workerId=${binding.workerId}`, {
+    const response = await fetch(`/eeg/stream?workerId=${workerId}`, {
       method: 'GET',
       signal: controller.signal
     })
@@ -309,7 +375,7 @@ async function startEeg(binding) {
     const decoder = new TextDecoder('utf-8')
     let buffer = ''
 
-    while (binding.eegRunning) {
+    while (true) {
       const { done, value } = await reader.read()
       if (done) break
       buffer += decoder.decode(value, { stream: true })
@@ -326,34 +392,96 @@ async function startEeg(binding) {
         if (!dataLine) continue
         const jsonText = dataLine.slice(5).trim()
         if (!jsonText) continue
-        updateEegData(binding, JSON.parse(jsonText))
+
+        const payload = JSON.parse(jsonText)
+        streamState.lastPayload = payload
+        streamState.bindingIds.forEach((bindingId) => {
+          const binding = getBindingById(bindingId)
+          if (binding?.eegRunning) {
+            updateEegData(binding, payload)
+          }
+        })
       }
     }
   } catch (error) {
     if (error.name !== 'AbortError') {
-      binding.eegStatus = 'error'
-      binding.eegStatusText = '连接失败'
-      ElMessage.error(`${binding.personName || '当前设备'} 脑电接入失败`)
+      streamState.bindingIds.forEach((bindingId) => {
+        const binding = getBindingById(bindingId)
+        if (!binding) return
+        binding.eegRunning = false
+        binding.activeWorkerId = null
+        binding.eegStatus = 'error'
+        binding.eegStatusText = '连接失败'
+      })
+      ElMessage.error(`${getDeviceLabel(workerId)} 脑电接入失败`)
     }
   } finally {
-    if (streamControllers.get(binding.id) === controller) {
-      streamControllers.delete(binding.id)
+    if (workerStreams.get(workerId) === streamState) {
+      workerStreams.delete(workerId)
     }
-    binding.eegRunning = false
+    setWorkerBindingsStopped(workerId)
   }
+}
+
+function subscribeBindingToWorker(binding) {
+  let streamState = getWorkerStream(binding.workerId)
+  if (!streamState) {
+    void openWorkerStream(binding.workerId)
+    streamState = getWorkerStream(binding.workerId)
+  }
+  binding.activeWorkerId = binding.workerId
+  binding.eegRunning = true
+  streamState?.bindingIds.add(binding.id)
+  if (streamState?.lastPayload) {
+    updateEegData(binding, streamState.lastPayload)
+  }
+}
+
+function unsubscribeBindingFromWorker(binding) {
+  const targetWorkerId = binding.activeWorkerId ?? binding.workerId
+  const streamState = getWorkerStream(targetWorkerId)
+  binding.activeWorkerId = null
+  if (!streamState) return
+  streamState.bindingIds.delete(binding.id)
+  if (streamState.bindingIds.size === 0) {
+    streamState.controller.abort()
+    workerStreams.delete(targetWorkerId)
+  }
+}
+
+function startEeg(binding) {
+  if (!binding.personId) {
+    ElMessage.warning('请先选择人员')
+    return
+  }
+
+  if (binding.eegRunning && binding.activeWorkerId === binding.workerId) {
+    binding.eegStatus = 'ok'
+    binding.eegStatusText = '在线'
+    refreshChart(binding)
+    return
+  }
+
+  stopEeg(binding.id)
+  updateBindingPerson(binding)
+  binding.eegStatus = 'connecting'
+  binding.eegStatusText = '连接中'
+  if (!binding.rawWaveBuffer.length) {
+    resetWaveState(binding)
+  } else {
+    refreshChart(binding)
+  }
+  subscribeBindingToWorker(binding)
 }
 
 function stopEeg(bindingId) {
   const binding = getBindingById(bindingId)
   if (!binding) return
+  unsubscribeBindingFromWorker(binding)
   binding.eegRunning = false
   if (binding.eegStatus !== 'idle') {
     binding.eegStatusText = '已断开'
   }
-  const controller = streamControllers.get(bindingId)
-  if (!controller) return
-  controller.abort()
-  streamControllers.delete(bindingId)
 }
 
 function ensureFaceConnection() {
@@ -473,7 +601,6 @@ function getWarningLevel(binding) {
 
 function getWarningText(binding) {
   if (binding.eegStatus === 'calibrating') return '脑电正在基线校准，暂不输出最终预警'
-  if (binding.eegStatus === 'bad_signal') return '脑电信号较差，请检查设备佩戴状态'
   if (binding.emotion === 'anxiety') return '预警：当前状态为焦虑'
   if (binding.emotion === 'stress') return '预警：当前状态为紧张'
   if (binding.emotion === 'fatigue') return '预警：当前状态为疲劳'
@@ -501,14 +628,9 @@ function evaluateWarning(binding) {
 }
 
 function getAlertType(binding) {
-  if (binding.eegStatus === 'bad_signal') return 'warning'
   if (binding.emotion === 'normal') return 'success'
   if (binding.emotion === 'fatigue' || binding.emotion === 'weakness') return 'error'
   return 'warning'
-}
-
-function formatPercent(value) {
-  return `${Math.round(Number(value || 0))}%`
 }
 
 function formatIndex(value) {
@@ -560,7 +682,6 @@ export function useMonitorCenter() {
     getWarningLevel,
     getWarningText,
     getAlertType,
-    formatPercent,
     formatIndex
   }
 }

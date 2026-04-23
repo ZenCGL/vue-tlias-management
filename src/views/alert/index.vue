@@ -14,8 +14,7 @@ const {
   getDeviceLabel,
   getWarningText,
   getAlertType,
-  formatShortTime,
-  formatPercent
+  formatShortTime
 } = useMonitorCenter()
 
 useMonitorCenterPage()
@@ -29,7 +28,7 @@ function getDevicePort(workerId) {
 }
 
 function formatBand(value) {
-  return Number(value || 0).toLocaleString('zh-CN')
+  return `${Number(value || 0).toFixed(1)}%`
 }
 </script>
 
@@ -142,22 +141,18 @@ function formatBand(value) {
             <strong>{{ binding.faceEmotion }}</strong>
           </div>
           <div class="summary-item">
-            <span>信号质量</span>
-            <strong>{{ formatPercent(100 - binding.signalQuality) }}</strong>
-          </div>
-          <div class="summary-item">
-            <span>Theta 波</span>
+            <span>Theta 占比</span>
             <strong>{{ formatBand(binding.bandSnapshot.theta) }}</strong>
           </div>
           <div class="summary-item">
-            <span>Alpha 波</span>
+            <span>Alpha 占比</span>
             <strong>{{ formatBand(binding.bandSnapshot.alpha) }}</strong>
           </div>
         </div>
 
         <div class="mini-footer">
           <div class="mini-line">
-            <span>Beta 波</span>
+            <span>Beta 占比</span>
             <strong>{{ formatBand(binding.bandSnapshot.beta) }}</strong>
           </div>
           <div class="mini-line">
