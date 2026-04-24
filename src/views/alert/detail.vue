@@ -17,8 +17,6 @@ const {
   setChartRef,
   startEeg,
   stopEeg,
-  beforeVideoUpload,
-  uploadFaceVideo,
   getWarningText,
   getAlertType
 } = useMonitorCenter()
@@ -119,30 +117,24 @@ function getFaceStatusTone(bindingValue) {
           <el-tag :type="binding.faceConnected ? 'success' : 'info'">{{ binding.faceStatusText }}</el-tag>
         </div>
 
-        <el-upload
-          drag
-          :show-file-list="false"
-          accept="video/mp4,video/ogg,video/flv,video/avi,video/wmv"
-          :before-upload="(file) => beforeVideoUpload(binding, file)"
-          :http-request="(options) => uploadFaceVideo(binding, options)"
-        >
-          <div class="upload-area">
-            <template v-if="binding.localVideoUrl">
-              <video :src="binding.localVideoUrl" class="preview-video" controls />
-            </template>
-            <template v-else>
-              <div class="upload-title">上传该人员的视频</div>
-              <div class="upload-subtitle">上传后自动监听微表情识别结果</div>
-            </template>
-            <el-progress
-              v-if="binding.videoUploading"
-              :percentage="binding.uploadPercent"
-              :stroke-width="10"
-              class="upload-progress"
-            />
+<div class="face-result-section" v-if="binding.faceImageUrl">
+    <div class="section-label">实时识别画面</div>
+    <div class="image-wrapper">
+      <el-image
+        :src="binding.faceImageUrl"
+        fit="contain"
+        :preview-src-list="[binding.faceImageUrl]"
+        class="result-image"
+      >
+        <template #error>
+          <div class="image-error">
+            <el-icon><Picture /></el-icon>
+            <span>加载失败</span>
           </div>
-        </el-upload>
-
+        </template>
+      </el-image>
+    </div>
+  </div>
         <div class="result-grid">
           <div class="metric-box">
             <span>接入状态</span>
@@ -380,6 +372,50 @@ function getFaceStatusTone(bindingValue) {
   padding: 20px;
 }
 
+.face-result-section {
+  margin-top: 16px;
+}
+
+.image-wrapper {
+  width: 100%;
+  min-height: 260px;
+  max-height: 420px;
+  aspect-ratio: 16 / 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #f5f5f5;
+  padding: 8px;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.result-image {
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+}
+
+.result-image :deep(.el-image__inner) {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.result-image :deep(.el-image__wrapper) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.image-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: #999;
+}
+
 .panel-head,
 .eeg-actions {
   display: flex;
@@ -515,6 +551,11 @@ function getFaceStatusTone(bindingValue) {
   .warning-grid,
   .band-grid {
     grid-template-columns: 1fr;
+  }
+
+  .image-wrapper {
+    min-height: 220px;
+    aspect-ratio: 4 / 3;
   }
 }
 </style>

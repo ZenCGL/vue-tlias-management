@@ -22,6 +22,12 @@ export default defineConfig({
       '/eeg': {
         target: 'http://127.0.0.1:5000',
         changeOrigin: true
+      },
+      '/wss': {
+        target: 'http://localhost:8081',
+        changeOrigin: true,
+        secure: false,
+        ws: true
       }
     }
   }

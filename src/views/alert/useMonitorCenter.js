@@ -5,10 +5,11 @@ import { createEegMonitor } from './useAlertEeg'
 import { createFaceMonitor } from './useAlertFace'
 
 const DEVICE_OPTIONS = [{ label: '设备 1 / COM3', value: 1 }]
+const FACE_FATIGUE_USER_ID = 'camera_001'
 
 const PERSONNEL_FALLBACK = [
-  { id: 'P001', uid: 'P001', name: '张三', type: '值班员' },
-  { id: 'P002', uid: 'P002', name: '李四', type: '巡检员' },
+  { id: 'P001', uid: 'P0010138', name: '张海威', type: '值班员' },
+  { id: 'P002', uid: 'P0023215', name: '郭凌刚', type: '巡检员' },
   { id: 'P003', uid: 'P003', name: '王五', type: '监护员' }
 ]
 
@@ -27,7 +28,7 @@ function createBinding(seed = 1) {
     personType: '',
     workerId: DEVICE_OPTIONS[(seed - 1) % DEVICE_OPTIONS.length].value,
     activeWorkerId: null,
-    faceChannelId: `face_${Date.now()}_${seed}`,
+    faceChannelId: FACE_FATIGUE_USER_ID,
     eegRunning: false,
     eegStatus: 'idle',
     eegStatusText: '待接入',
@@ -52,7 +53,8 @@ function createBinding(seed = 1) {
     rawWaveBuffer: [],
     waveScale: 1,
     faceConnected: false,
-    faceStatusText: '待上传',
+    faceImageUrl: '',
+    faceStatusText: '待接入',
     faceEmotion: '未识别',
     faceScore: '--',
     faceRate: '--',

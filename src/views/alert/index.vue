@@ -125,6 +125,24 @@ function formatBand(value) {
           <el-form-item label="微表情通道">
             <el-input v-model="binding.faceChannelId" />
           </el-form-item>
+          <div class="face-result-section" v-if="binding.faceImageUrl">
+      <div class="section-label">实时识别画面</div>
+      <div class="image-wrapper">
+        <el-image
+          :src="binding.faceImageUrl"
+          fit="contain"
+          :preview-src-list="[binding.faceImageUrl]"
+          class="result-image"
+        >
+          <template #error>
+            <div class="image-error">
+              <el-icon><Picture /></el-icon>
+              <span>加载失败</span>
+            </div>
+          </template>
+        </el-image>
+      </div>
+    </div>
         </div>
 
         <div class="summary-grid">
@@ -174,6 +192,32 @@ function formatBand(value) {
 </template>
 
 <style scoped>
+
+.face-result-section {
+  margin-top: 16px;
+}
+.image-wrapper {
+  width: 100%;
+  min-height: 200px; /* 确保容器有高度 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #f5f5f5;
+  padding: 8px;
+}
+.result-image {
+  max-width: 100%;
+  max-height: 200px; /* 限制图片最大高度，避免溢出 */
+  border-radius: 4px;
+}
+.image-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: #999;
+}
+
 .overview-page {
   min-height: 100%;
   padding: 24px;
