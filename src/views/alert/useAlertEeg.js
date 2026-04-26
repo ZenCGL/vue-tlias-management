@@ -11,10 +11,14 @@ const EMOTION_TEXT = {
   fatigue: '疲劳',
   weakness: '虚弱'
 }
+const BAND_NAMES = ['delta', 'theta', 'alpha', 'beta', 'gamma']
+const BAND_LABELS = ['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']
 
 export function createEegMonitor({ state, getBindingById, getDeviceLabel, evaluateWarning }) {
-  const chartRefs = new Map()
-  const chartInstances = new Map()
+  const waveChartRefs = new Map()
+  const waveChartInstances = new Map()
+  const bandChartRefs = new Map()
+  const bandChartInstances = new Map()
   const workerStreams = new Map()
 
   function getBandSnapshot(rawPowers = {}) {
@@ -48,10 +52,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
   }
 
   function normalizeWaveChunk(binding, rawWave = []) {
-    const numericSamples = rawWave
-      .map((value) => Number(value))
-      .filter((value) => Number.isFinite(value))
-
+    const numericSamples = rawWave.map((value) => Number(value)).filter((value) => Number.isFinite(value))
     if (!numericSamples.length) return []
 
     const smoothed = smoothWaveSamples(numericSamples)
@@ -67,22 +68,8 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     return centered.map((value) => Number((Math.tanh((value / scale) * 1.6) * WAVE_DISPLAY_RANGE).toFixed(2)))
   }
 
-  function ensureChart(binding) {
-    const el = chartRefs.get(binding.id)
-    if (!el) return
-
-    let instance = chartInstances.get(binding.id)
-    if (instance && instance.getDom() !== el) {
-      instance.dispose()
-      chartInstances.delete(binding.id)
-      instance = null
-    }
-    if (!instance) {
-      instance = echarts.init(el)
-      chartInstances.set(binding.id, instance)
-    }
-
-    instance.setOption({
+  function getWaveChartOption(binding) {
+    return {
       color: ['#0f766e'],
       tooltip: { trigger: 'axis' },
       grid: { left: 40, right: 20, top: 24, bottom: 28 },
@@ -108,53 +95,164 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
           sampling: 'lttb',
           animation: false,
           lineStyle: { width: 2 },
+          areaStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: 'rgba(15, 118, 110, 0.28)' },
+              { offset: 1, color: 'rgba(15, 118, 110, 0.02)' }
+            ])
+          },
           data: [...binding.rawWaveBuffer]
         }
       ]
-    })
+    }
+  }
+
+  function getBandChartOption(binding) {
+    const values = BAND_NAMES.map((name) => Number(binding.bandSnapshot[name] || 0).toFixed(1))
+    return {
+      tooltip: { trigger: 'item' },
+      radar: {
+        radius: '62%',
+        center: ['50%', '56%'],
+        splitNumber: 5,
+        axisName: { color: '#325064' },
+        splitArea: {
+          areaStyle: {
+            color: ['rgba(13, 148, 136, 0.04)', 'rgba(13, 148, 136, 0.08)']
+          }
+        },
+        splitLine: { lineStyle: { color: 'rgba(80, 117, 136, 0.18)' } },
+        axisLine: { lineStyle: { color: 'rgba(80, 117, 136, 0.18)' } },
+        indicator: BAND_LABELS.map((label) => ({ name: label, max: 100 }))
+      },
+      series: [
+        {
+          type: 'radar',
+          data: [
+            {
+              value: values,
+              name: '脑电频段',
+              symbol: 'circle',
+              symbolSize: 7,
+              lineStyle: { color: '#0f766e', width: 2 },
+              itemStyle: { color: '#14b8a6' },
+              areaStyle: { color: 'rgba(20, 184, 166, 0.24)' }
+            }
+          ]
+        }
+      ]
+    }
+  }
+
+  function ensureChartInstance(refMap, instanceMap, bindingId, optionFactory) {
+    const el = refMap.get(bindingId)
+    if (!el) return null
+
+    let instance = instanceMap.get(bindingId)
+    if (instance && instance.getDom() !== el) {
+      instance.dispose()
+      instanceMap.delete(bindingId)
+      instance = null
+    }
+    if (!instance) {
+      instance = echarts.init(el)
+      instanceMap.set(bindingId, instance)
+    }
+
+    const binding = getBindingById(bindingId)
+    if (binding) {
+      instance.setOption(optionFactory(binding))
+      instance.resize()
+    }
+    return instance
+  }
+
+  function ensureWaveChart(binding) {
+    return ensureChartInstance(waveChartRefs, waveChartInstances, binding.id, getWaveChartOption)
+  }
+
+  function ensureBandChart(binding) {
+    return ensureChartInstance(bandChartRefs, bandChartInstances, binding.id, getBandChartOption)
+  }
+
+  function refreshChart(instanceMap, binding, partialOption) {
+    const instance = instanceMap.get(binding.id)
+    if (!instance) return
+    instance.setOption(partialOption)
     instance.resize()
   }
 
-  function refreshChart(binding) {
-    const instance = chartInstances.get(binding.id)
-    if (!instance) {
-      ensureChart(binding)
+  function refreshWaveChart(binding) {
+    if (!waveChartInstances.get(binding.id)) {
+      ensureWaveChart(binding)
       return
     }
-
-    instance.setOption({
+    refreshChart(waveChartInstances, binding, {
       xAxis: { data: binding.rawWaveBuffer.map((_, index) => index) },
-      yAxis: {
-        min: -WAVE_DISPLAY_RANGE,
-        max: WAVE_DISPLAY_RANGE
-      },
+      yAxis: { min: -WAVE_DISPLAY_RANGE, max: WAVE_DISPLAY_RANGE },
       series: [{ data: [...binding.rawWaveBuffer] }]
     })
-    instance.resize()
+  }
+
+  function refreshBandChart(binding) {
+    if (!bandChartInstances.get(binding.id)) {
+      ensureBandChart(binding)
+      return
+    }
+    refreshChart(bandChartInstances, binding, {
+      series: [{ data: [{ value: BAND_NAMES.map((name) => Number(binding.bandSnapshot[name] || 0).toFixed(1)) }] }]
+    })
   }
 
   function disposeChart(bindingId) {
-    const instance = chartInstances.get(bindingId)
-    if (!instance) return
-    instance.dispose()
-    chartInstances.delete(bindingId)
+    const waveInstance = waveChartInstances.get(bindingId)
+    if (waveInstance) {
+      waveInstance.dispose()
+      waveChartInstances.delete(bindingId)
+    }
+    const bandInstance = bandChartInstances.get(bindingId)
+    if (bandInstance) {
+      bandInstance.dispose()
+      bandChartInstances.delete(bindingId)
+    }
   }
 
-  function setChartRef(bindingId) {
+  function setWaveChartRef(bindingId) {
     return (el) => {
       if (!el) {
-        disposeChart(bindingId)
-        chartRefs.delete(bindingId)
+        const instance = waveChartInstances.get(bindingId)
+        if (instance) {
+          instance.dispose()
+          waveChartInstances.delete(bindingId)
+        }
+        waveChartRefs.delete(bindingId)
         return
       }
-      chartRefs.set(bindingId, el)
+      waveChartRefs.set(bindingId, el)
       const binding = getBindingById(bindingId)
-      if (binding) ensureChart(binding)
+      if (binding) ensureWaveChart(binding)
+    }
+  }
+
+  function setBandChartRef(bindingId) {
+    return (el) => {
+      if (!el) {
+        const instance = bandChartInstances.get(bindingId)
+        if (instance) {
+          instance.dispose()
+          bandChartInstances.delete(bindingId)
+        }
+        bandChartRefs.delete(bindingId)
+        return
+      }
+      bandChartRefs.set(bindingId, el)
+      const binding = getBindingById(bindingId)
+      if (binding) ensureBandChart(binding)
     }
   }
 
   function appendRawWave(binding, rawWave = []) {
-    if (!Array.isArray(rawWave) || rawWave.length === 0) return
+    if (!Array.isArray(rawWave) || !rawWave.length) return
     const samples = normalizeWaveChunk(binding, rawWave)
     if (!samples.length) return
     binding.rawWaveBuffer.push(...samples)
@@ -179,20 +277,20 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     binding.bandSnapshot = getBandSnapshot(payload.raw_powers)
     appendRawWave(binding, payload.raw_wave)
 
-    if (payload.status === 'calibrating') {
-      binding.eegStatusText = `基线校准 ${Math.round(binding.calibrationProgress * 100)}%`
-    } else {
-      binding.eegStatusText = '在线'
-    }
+    binding.eegStatusText = payload.status === 'calibrating'
+      ? `基线校准 ${Math.round(binding.calibrationProgress * 100)}%`
+      : '在线'
 
-    refreshChart(binding)
+    refreshWaveChart(binding)
+    refreshBandChart(binding)
     evaluateWarning(binding)
   }
 
   function resetWaveState(binding) {
     binding.rawWaveBuffer = []
     binding.waveScale = 1
-    refreshChart(binding)
+    refreshWaveChart(binding)
+    refreshBandChart(binding)
   }
 
   function getWorkerStream(workerId) {
@@ -244,10 +342,7 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
           const splitIndex = buffer.indexOf('\n\n')
           const block = buffer.slice(0, splitIndex)
           buffer = buffer.slice(splitIndex + 2)
-          const lines = block
-            .split('\n')
-            .map((line) => line.trim())
-            .filter(Boolean)
+          const lines = block.split('\n').map((line) => line.trim()).filter(Boolean)
           const dataLine = lines.find((line) => line.startsWith('data:'))
           if (!dataLine) continue
           const jsonText = dataLine.slice(5).trim()
@@ -318,7 +413,8 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     if (binding.eegRunning && binding.activeWorkerId === binding.workerId) {
       binding.eegStatus = 'ok'
       binding.eegStatusText = '在线'
-      refreshChart(binding)
+      refreshWaveChart(binding)
+      refreshBandChart(binding)
       return
     }
 
@@ -328,7 +424,8 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
     if (!binding.rawWaveBuffer.length) {
       resetWaveState(binding)
     } else {
-      refreshChart(binding)
+      refreshWaveChart(binding)
+      refreshBandChart(binding)
     }
     subscribeBindingToWorker(binding)
   }
@@ -344,15 +441,20 @@ export function createEegMonitor({ state, getBindingById, getDeviceLabel, evalua
   }
 
   function ensureCharts(bindings) {
-    bindings.forEach((binding) => ensureChart(binding))
+    bindings.forEach((binding) => {
+      ensureWaveChart(binding)
+      ensureBandChart(binding)
+    })
   }
 
   function resizeCharts() {
-    chartInstances.forEach((instance) => instance.resize())
+    waveChartInstances.forEach((instance) => instance.resize())
+    bandChartInstances.forEach((instance) => instance.resize())
   }
 
   return {
-    setChartRef,
+    setChartRef: setWaveChartRef,
+    setBandChartRef,
     startEeg,
     stopEeg,
     disposeChart,

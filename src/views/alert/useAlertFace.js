@@ -3,6 +3,7 @@ import * as Stomp from 'stompjs'
 
 const FACE_FATIGUE_USER_ID = 'camera_001'
 const FACE_FATIGUE_WS_URL = '/wss'
+const FACE_FRAME_MIN_INTERVAL = 120
 
 function guessImageMime(base64) {
   if (base64.startsWith('/9j/')) return 'image/jpeg'
@@ -32,6 +33,103 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning }) {
   let stompConnected = false
   let reconnectTimer = null
 
+  const topicSubscriptions = new Map()
+  const topicStates = new Map()
+
+  function getTopicState(topic) {
+    if (!topicStates.has(topic)) {
+      topicStates.set(topic, {
+        lastTimestamp: 0,
+        lastRenderedAt: 0,
+        pendingPayload: null,
+        animationFrameId: 0,
+        timeoutId: 0
+      })
+    }
+    return topicStates.get(topic)
+  }
+
+  function getBindingTopic(binding) {
+    return binding.faceChannelId || FACE_FATIGUE_USER_ID
+  }
+
+  function getTopicBindings(topic) {
+    return state.bindings.filter((binding) => getBindingTopic(binding) === topic)
+  }
+
+  function applyPayloadToBinding(binding, payload) {
+    binding.faceConnected = true
+    binding.faceStatusText = '识别中'
+    binding.faceEmotion = payload.emotionCat || '未识别'
+    binding.faceScore = payload.score || '--'
+    binding.faceRate = payload.rate || '--'
+    binding.faceRank = payload.fatigueRank == null ? null : Number(payload.fatigueRank)
+    binding.faceStopRequired = binding.faceEmotion !== '其他' && binding.faceEmotion !== '未识别'
+    binding.faceImageUrl = normalizeFaceImage(
+      payload.image ?? payload.image_b64 ?? payload.imageBase64 ?? payload.base64Image
+    )
+    evaluateWarning(binding)
+  }
+
+  function flushTopicPayload(topic) {
+    const topicState = getTopicState(topic)
+    const payload = topicState.pendingPayload
+    topicState.pendingPayload = null
+    topicState.timeoutId = 0
+    topicState.animationFrameId = 0
+    if (!payload) return
+
+    topicState.lastRenderedAt = Date.now()
+    getTopicBindings(topic).forEach((binding) => applyPayloadToBinding(binding, payload))
+  }
+
+  function scheduleTopicRender(topic, payload) {
+    const topicState = getTopicState(topic)
+    const timestamp = Number(payload.timestamp || 0)
+    if (timestamp && timestamp < topicState.lastTimestamp) {
+      return
+    }
+    if (timestamp) {
+      topicState.lastTimestamp = timestamp
+    }
+
+    topicState.pendingPayload = payload
+    if (topicState.animationFrameId || topicState.timeoutId) return
+
+    topicState.animationFrameId = window.requestAnimationFrame(() => {
+      topicState.animationFrameId = 0
+      const elapsed = Date.now() - topicState.lastRenderedAt
+      if (elapsed >= FACE_FRAME_MIN_INTERVAL) {
+        flushTopicPayload(topic)
+        return
+      }
+
+      topicState.timeoutId = window.setTimeout(() => {
+        flushTopicPayload(topic)
+      }, FACE_FRAME_MIN_INTERVAL - elapsed)
+    })
+  }
+
+  function subscribeTopic(topic) {
+    if (!stompConnected || !stompClient || topicSubscriptions.has(topic)) return
+
+    const subscription = stompClient.subscribe(`/topic/face_fatigue/${topic}`, (message) => {
+      if (!message.body) return
+
+      let payload = {}
+      try {
+        payload = JSON.parse(message.body)
+      } catch (error) {
+        console.error('Failed to parse face fatigue payload:', error)
+        return
+      }
+
+      scheduleTopicRender(topic, payload)
+    })
+
+    topicSubscriptions.set(topic, subscription)
+  }
+
   function ensureFaceConnection() {
     if (stompConnected || stompClient) return
 
@@ -57,44 +155,37 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning }) {
   }
 
   function subscribeFace(binding) {
-    if (!stompConnected || !stompClient || binding.faceSubscription) return
-    binding.faceSubscription = stompClient.subscribe(`/topic/face_fatigue/${FACE_FATIGUE_USER_ID}`, (message) => {
-      if (!message.body) return
-      binding.faceConnected = true
-      binding.faceStatusText = '识别中'
-
-      let payload = {}
-      try {
-        payload = JSON.parse(message.body)
-      } catch (error) {
-        console.error('Failed to parse face fatigue payload:', error)
-        return
-      }
-      console.info('Received face fatigue data for binding', binding.id, payload)
-      binding.faceEmotion = payload.emotionCat || '未识别'
-      binding.faceScore = payload.score || '--'
-      binding.faceRate = payload.rate || '--'
-      binding.faceRank = payload.fatigueRank == null ? null : Number(payload.fatigueRank)
-      binding.faceStopRequired = binding.faceEmotion !== '其他' && binding.faceEmotion !== '未识别'
-
-      binding.faceImageUrl = normalizeFaceImage(
-        payload.image ?? payload.image_b64 ?? payload.imageBase64 ?? payload.base64Image
-      )
-      
-      evaluateWarning(binding)
-    })
+    if (!stompConnected || !stompClient) return
+    const topic = getBindingTopic(binding)
+    binding.faceSubscription = topic
+    subscribeTopic(topic)
   }
 
   function unsubscribeFace(bindingId) {
     const binding = getBindingById(bindingId)
     if (!binding?.faceSubscription) return
-    binding.faceSubscription.unsubscribe()
+
+    const topic = binding.faceSubscription
     binding.faceSubscription = null
+    if (getTopicBindings(topic).length) return
+
+    topicSubscriptions.get(topic)?.unsubscribe()
+    topicSubscriptions.delete(topic)
+
+    const topicState = topicStates.get(topic)
+    if (!topicState) return
+    if (topicState.animationFrameId) {
+      window.cancelAnimationFrame(topicState.animationFrameId)
+    }
+    if (topicState.timeoutId) {
+      window.clearTimeout(topicState.timeoutId)
+    }
+    topicStates.delete(topic)
   }
 
-  
   return {
     ensureFaceConnection,
+    subscribeFace,
     unsubscribeFace
   }
 }

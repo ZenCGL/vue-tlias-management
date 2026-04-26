@@ -1,13 +1,17 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { Monitor } from '@element-plus/icons-vue'
+import { Cpu, Histogram, Monitor, User, VideoCamera } from '@element-plus/icons-vue'
 import { useRoute } from 'vue-router'
 
 const route = useRoute()
 const loginName = ref('')
 
 const activeMenu = computed(() => {
-  return route.path.startsWith('/alert') ? '/alert' : '/alert'
+  if (route.path.startsWith('/manage/personnel')) return '/manage/personnel'
+  if (route.path.startsWith('/manage/device')) return '/manage/device'
+  if (route.path.startsWith('/alert/eeg') || route.path.includes('/eeg')) return '/alert/eeg'
+  if (route.path.startsWith('/alert/face') || route.path.includes('/face')) return '/alert/face'
+  return '/alert'
 })
 
 onMounted(() => {
@@ -33,7 +37,23 @@ onMounted(() => {
         <el-menu :default-active="activeMenu" router class="nav-menu">
           <el-menu-item index="/alert" class="nav-item">
             <el-icon><Monitor /></el-icon>
-            <span>综合监测主界面</span>
+            <span>综合监测</span>
+          </el-menu-item>
+          <el-menu-item index="/alert/eeg" class="nav-item">
+            <el-icon><Histogram /></el-icon>
+            <span>脑电界面</span>
+          </el-menu-item>
+          <el-menu-item index="/alert/face" class="nav-item">
+            <el-icon><VideoCamera /></el-icon>
+            <span>微表情界面</span>
+          </el-menu-item>
+          <el-menu-item index="/manage/personnel" class="nav-item">
+            <el-icon><User /></el-icon>
+            <span>人员管理</span>
+          </el-menu-item>
+          <el-menu-item index="/manage/device" class="nav-item">
+            <el-icon><Cpu /></el-icon>
+            <span>设备管理</span>
           </el-menu-item>
         </el-menu>
 

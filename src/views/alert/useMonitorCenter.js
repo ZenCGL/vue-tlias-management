@@ -1,17 +1,25 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
-import { queryPersonnelApi } from '@/api/personnel'
 import { createEegMonitor } from './useAlertEeg'
 import { createFaceMonitor } from './useAlertFace'
 
-const DEVICE_OPTIONS = [{ label: '设备 1 / COM3', value: 1 }]
+const PERSONNEL_STORAGE_KEY = 'alert-personnel-options'
+const DEVICE_STORAGE_KEY = 'alert-device-options'
 const FACE_FATIGUE_USER_ID = 'camera_001'
 
-const PERSONNEL_FALLBACK = [
-  { id: 'P001', uid: 'P0010138', name: '张海威', type: '值班员' },
-  { id: 'P002', uid: 'P0023215', name: '郭凌刚', type: '巡检员' },
-  { id: 'P003', uid: 'P003', name: '王五', type: '监护员' }
+const DEFAULT_PERSONNEL = [
+  { id: 'P001', uid: 'P001', name: 'P001', type: '值班员' },
+  { id: 'P002', uid: 'P002', name: 'P002', type: '巡检员' },
+  { id: 'P003', uid: 'P003', name: 'P003', type: '监护员' }
 ]
+
+const DEFAULT_DEVICES = [
+  { value: 1, name: '设备 1', port: 'COM3' },
+  { value: 2, name: '设备 2', port: 'COM4' },
+  { value: 3, name: '设备 3', port: 'COM5' }
+]
+
+const DEVICE_OPTIONS = reactive([])
 
 const state = reactive({
   initialized: false,
@@ -20,13 +28,90 @@ const state = reactive({
   alertHistory: []
 })
 
+function readLocalList(storageKey, fallback = []) {
+  try {
+    const raw = localStorage.getItem(storageKey)
+    if (!raw) return [...fallback]
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : [...fallback]
+  } catch (error) {
+    console.warn(`Failed to read ${storageKey}`, error)
+    return [...fallback]
+  }
+}
+
+function writeLocalList(storageKey, value) {
+  localStorage.setItem(storageKey, JSON.stringify(value))
+}
+
+function replaceArray(target, values) {
+  target.splice(0, target.length, ...values)
+}
+
+function normalizePersonnel(item, index = 0) {
+  const uid = String(item.uid || item.id || `P${String(index + 1).padStart(3, '0')}`)
+  return {
+    id: String(item.id || uid),
+    uid,
+    name: String(item.name || `人员 ${index + 1}`),
+    type: String(item.type || '未分类')
+  }
+}
+
+function normalizeDevice(item, index = 0) {
+  const value = Number(item.value ?? item.workerId ?? index + 1)
+  const name = String(item.name || `设备 ${value}`)
+  const port = String(item.port || '')
+  return {
+    value,
+    name,
+    port,
+    label: port ? `${name} / ${port}` : name
+  }
+}
+
+function loadPersonnel() {
+  const stored = readLocalList(PERSONNEL_STORAGE_KEY, [])
+  const source = stored.length ? stored : DEFAULT_PERSONNEL
+  const items = source.map(normalizePersonnel)
+  replaceArray(state.personnelOptions, items)
+  if (!stored.length) {
+    persistPersonnel()
+  }
+}
+
+function loadDevices() {
+  const stored = readLocalList(DEVICE_STORAGE_KEY, [])
+  const source = stored.length ? stored : DEFAULT_DEVICES
+  const items = source.map(normalizeDevice)
+  replaceArray(DEVICE_OPTIONS, items)
+  if (!stored.length) {
+    persistDevices()
+  }
+}
+
+function persistPersonnel() {
+  writeLocalList(
+    PERSONNEL_STORAGE_KEY,
+    state.personnelOptions.map(({ id, uid, name, type }) => ({ id, uid, name, type }))
+  )
+}
+
+function persistDevices() {
+  writeLocalList(
+    DEVICE_STORAGE_KEY,
+    DEVICE_OPTIONS.map(({ value, name, port }) => ({ value, name, port }))
+  )
+}
+
 function createBinding(seed = 1) {
+  const defaultWorkerId = DEVICE_OPTIONS[(seed - 1) % Math.max(DEVICE_OPTIONS.length, 1)]?.value ?? null
   return reactive({
     id: `binding-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     personId: '',
     personName: '',
     personType: '',
-    workerId: DEVICE_OPTIONS[(seed - 1) % DEVICE_OPTIONS.length].value,
+    workerId: defaultWorkerId,
     activeWorkerId: null,
     faceChannelId: FACE_FATIGUE_USER_ID,
     eegRunning: false,
@@ -76,7 +161,7 @@ function getBindingById(bindingId) {
 }
 
 function getDeviceLabel(workerId) {
-  return DEVICE_OPTIONS.find((item) => item.value === workerId)?.label || `设备 ${workerId}`
+  return DEVICE_OPTIONS.find((item) => item.value === workerId)?.label || '未配置设备'
 }
 
 function updateBindingPerson(binding) {
@@ -131,28 +216,34 @@ const faceMonitor = createFaceMonitor({
   evaluateWarning
 })
 
-async function loadPersonnel() {
-  try {
-    const res = await queryPersonnelApi({ page: 1, pageSize: 100 })
-    if (res?.code && Array.isArray(res?.data?.rows) && res.data.rows.length) {
-      state.personnelOptions = res.data.rows.map((item) => ({
-        id: item.id || item.uid,
-        uid: item.uid,
-        name: item.name,
-        type: item.type || '未分类'
-      }))
+function syncBindingsWithDevices() {
+  const fallbackWorkerId = DEVICE_OPTIONS[0]?.value ?? null
+  state.bindings.forEach((binding) => {
+    if (!DEVICE_OPTIONS.some((item) => item.value === binding.workerId)) {
+      eegMonitor.stopEeg(binding.id)
+      binding.workerId = fallbackWorkerId
+      binding.activeWorkerId = null
+    }
+  })
+}
+
+function syncBindingsWithPersonnel() {
+  state.bindings.forEach((binding) => {
+    if (!state.personnelOptions.some((item) => item.id === binding.personId || item.uid === binding.personId)) {
+      binding.personId = ''
+      binding.personName = ''
+      binding.personType = ''
       return
     }
-  } catch (error) {
-    console.warn('loadPersonnel failed', error)
-  }
-  state.personnelOptions = PERSONNEL_FALLBACK
+    updateBindingPerson(binding)
+  })
 }
 
 async function initMonitorCenter() {
   if (state.initialized) return
-  state.bindings = [createBinding(1), createBinding(2)]
-  await loadPersonnel()
+  loadPersonnel()
+  loadDevices()
+  state.bindings = []
   faceMonitor.ensureFaceConnection()
   state.initialized = true
 }
@@ -176,6 +267,67 @@ function removeBinding(bindingId) {
     URL.revokeObjectURL(binding.localVideoUrl)
   }
   state.bindings.splice(index, 1)
+}
+
+function addPersonnel(record) {
+  const normalized = normalizePersonnel({
+    id: `person-${Date.now()}`,
+    uid: record.uid,
+    name: record.name,
+    type: record.type
+  }, state.personnelOptions.length)
+  state.personnelOptions.push(normalized)
+  persistPersonnel()
+}
+
+function updatePersonnel(record) {
+  const index = state.personnelOptions.findIndex((item) => item.id === record.id)
+  if (index === -1) return
+  state.personnelOptions[index] = normalizePersonnel(record, index)
+  persistPersonnel()
+  syncBindingsWithPersonnel()
+}
+
+function removePersonnel(personId) {
+  const index = state.personnelOptions.findIndex((item) => item.id === personId)
+  if (index === -1) return
+  state.personnelOptions.splice(index, 1)
+  persistPersonnel()
+  syncBindingsWithPersonnel()
+}
+
+function getNextDeviceValue() {
+  return DEVICE_OPTIONS.reduce((max, item) => Math.max(max, Number(item.value || 0)), 0) + 1
+}
+
+function addDevice(record) {
+  const normalized = normalizeDevice({
+    value: getNextDeviceValue(),
+    name: record.name,
+    port: record.port
+  }, DEVICE_OPTIONS.length)
+  DEVICE_OPTIONS.push(normalized)
+  persistDevices()
+  state.bindings.forEach((binding) => {
+    if (binding.workerId == null) {
+      binding.workerId = normalized.value
+    }
+  })
+}
+
+function updateDevice(record) {
+  const index = DEVICE_OPTIONS.findIndex((item) => item.value === Number(record.value))
+  if (index === -1) return
+  DEVICE_OPTIONS[index] = normalizeDevice(record, index)
+  persistDevices()
+}
+
+function removeDevice(deviceValue) {
+  const index = DEVICE_OPTIONS.findIndex((item) => item.value === Number(deviceValue))
+  if (index === -1) return
+  DEVICE_OPTIONS.splice(index, 1)
+  persistDevices()
+  syncBindingsWithDevices()
 }
 
 function formatShortTime(value) {
@@ -223,15 +375,20 @@ export function useMonitorCenter() {
     useMonitorCenterPage,
     addBinding,
     removeBinding,
+    addPersonnel,
+    updatePersonnel,
+    removePersonnel,
+    addDevice,
+    updateDevice,
+    removeDevice,
     updateBindingPerson,
     getBindingById,
     getDeviceLabel,
     formatShortTime,
     setChartRef: eegMonitor.setChartRef,
+    setBandChartRef: eegMonitor.setBandChartRef,
     startEeg: eegMonitor.startEeg,
     stopEeg: eegMonitor.stopEeg,
-    beforeVideoUpload: faceMonitor.beforeVideoUpload,
-    uploadFaceVideo: faceMonitor.uploadFaceVideo,
     getWarningLevel,
     getWarningText,
     getAlertType,
