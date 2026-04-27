@@ -11,6 +11,7 @@ const {
   addBinding,
   removeBinding,
   updateBindingPerson,
+  refreshFaceSubscription,
   getDeviceLabel,
   getWarningText,
   getAlertType,
@@ -121,7 +122,7 @@ function getFaceMetric(binding, kind = 'activity') {
             <el-input :model-value="binding.personType" disabled placeholder="自动带出" />
           </el-form-item>
           <el-form-item label="微表情通道">
-            <el-input v-model="binding.faceChannelId" />
+            <el-input v-model="binding.faceChannelId" @change="refreshFaceSubscription(binding.id)" />
           </el-form-item>
           <div v-if="binding.faceImageUrl" class="face-result-section">
             <div class="section-label">实时识别画面</div>

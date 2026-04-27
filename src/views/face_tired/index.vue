@@ -145,17 +145,37 @@ const randomString = (e) =>{
 
 // 定义 stompClient
 const stompClient = ref(null);
-var userId = randomString(6);
+const RTSP_USER_ID = 'camera_001';
+var userId = RTSP_USER_ID;
 const fatigueRank = ref(null);
 const emotionCat = ref(null);
 const score = ref(null);
 const rate = ref(null);
+const currentFrame = ref('');
+
+const normalizeIncomingImage = (image) => {
+  if (typeof image !== 'string') return '';
+  const trimmed = image.trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('data:image/')) return trimmed;
+  return `data:image/jpeg;base64,${trimmed}`;
+};
 
 const subscribeTopics = () => {
   subscriptions.value.forEach(sub => sub.unsubscribe());
   subscriptions.value = [];
+  const videoSubscription = stompClient.value.subscribe(`/topic/face_video/${userId}`, (message) => {
+    if (!message.body) return;
+    try {
+      const data = JSON.parse(message.body);
+      currentFrame.value = normalizeIncomingImage(data.image);
+    } catch (error) {
+      console.error('Failed to parse video frame message:', error);
+    }
+  });
+  subscriptions.value.push(videoSubscription);
   // 订阅 "/topic" 目标
-    stompClient.value.subscribe(`/topic/face_fatigue/${userId}`, (message) => {
+    const fatigueSubscription = stompClient.value.subscribe(`/topic/face_fatigue/${userId}`, (message) => {
     if (message.body) {
         try {
             const data = JSON.parse(message.body);
@@ -174,15 +194,17 @@ const subscribeTopics = () => {
         }
     }
 });
+  subscriptions.value.push(fatigueSubscription);
 
     // 订阅 "/user/queue/greetings" 目标（用户特定消息）
-    stompClient.value.subscribe('/user/queue/greetings', (message) => {
+    const greetingSubscription = stompClient.value.subscribe('/user/queue/greetings', (message) => {
       if (message.body) {
         const data = JSON.parse(message.body);
         console.log('Received user-specific message:', data);
         // 在这里处理用户特定的消息
       }
     });
+  subscriptions.value.push(greetingSubscription);
 }
 
 const reconnect = () => {
@@ -266,6 +288,7 @@ onBeforeUnmount(() => {
    if (chartInstance.value) {
     chartInstance.value.dispose();
   }
+  disconnect();
   if (localVideoUrl.value) {
     URL.revokeObjectURL(localVideoUrl.value);
   }
@@ -463,9 +486,14 @@ const handleVideoSuccess = (res, file) => {
         请上传要检测疲劳等级的视频文件
       </div>
     </template>
-        <div class="upload-content" v-if="localVideoUrl && !videoFlag">
+        <div class="upload-content" v-if="(currentFrame || localVideoUrl) && !videoFlag">
+          <img
+            v-if="currentFrame"
+            :src="currentFrame"
+            class="preview-video"
+          />
           <video
-            v-if="localVideoUrl"
+            v-else-if="localVideoUrl"
             :src="localVideoUrl"
             class="preview-video"
             controls

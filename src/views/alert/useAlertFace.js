@@ -31,6 +31,7 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning }) {
   let stompClient = null
   let stompSocket = null
   let stompConnected = false
+  let stompConnecting = false
   let reconnectTimer = null
 
   const topicSubscriptions = new Map()
@@ -50,11 +51,51 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning }) {
   }
 
   function getBindingTopic(binding) {
-    return binding.faceChannelId || FACE_FATIGUE_USER_ID
+    const topic = String(binding?.faceChannelId || '').trim()
+    return topic || FACE_FATIGUE_USER_ID
   }
 
   function getTopicBindings(topic) {
     return state.bindings.filter((binding) => getBindingTopic(binding) === topic)
+  }
+
+  function setBindingState(binding, { connected, statusText }) {
+    if (!binding) return
+    binding.faceConnected = connected
+    binding.faceStatusText = statusText
+  }
+
+  function markBindingsWaiting(statusText) {
+    state.bindings.forEach((binding) => {
+      if (binding.faceSubscription) {
+        setBindingState(binding, { connected: false, statusText })
+      }
+    })
+  }
+
+  function clearTopicState(topic) {
+    const topicState = topicStates.get(topic)
+    if (!topicState) return
+    if (topicState.animationFrameId) {
+      window.cancelAnimationFrame(topicState.animationFrameId)
+    }
+    if (topicState.timeoutId) {
+      window.clearTimeout(topicState.timeoutId)
+    }
+    topicStates.delete(topic)
+  }
+
+  function detachBindingFromTopic(binding, topic) {
+    if (!topic) return
+    binding.faceSubscription = null
+
+    if (getTopicBindings(topic).length) {
+      return
+    }
+
+    topicSubscriptions.get(topic)?.unsubscribe()
+    topicSubscriptions.delete(topic)
+    clearTopicState(topic)
   }
 
   function applyPayloadToBinding(binding, payload) {
@@ -130,35 +171,79 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning }) {
     topicSubscriptions.set(topic, subscription)
   }
 
+  function handleDisconnect(statusText = '重连中') {
+    stompConnected = false
+    stompConnecting = false
+    stompClient = null
+    stompSocket = null
+    markBindingsWaiting(statusText)
+
+    if (reconnectTimer) return
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null
+      ensureFaceConnection()
+    }, 1500)
+  }
+
   function ensureFaceConnection() {
-    if (stompConnected || stompClient) return
+    if (stompConnected || stompConnecting || stompClient) return
+
+    stompConnecting = true
+    markBindingsWaiting('连接中')
 
     stompSocket = new SockJS(FACE_FATIGUE_WS_URL)
     stompClient = Stomp.over(stompSocket)
     stompClient.debug = () => {}
+
+    if (typeof stompSocket.onclose !== 'undefined') {
+      stompSocket.onclose = () => {
+        handleDisconnect('连接断开，重连中')
+      }
+    }
+
     stompClient.connect(
       {},
       () => {
         stompConnected = true
-        state.bindings.forEach((binding) => subscribeFace(binding))
+        stompConnecting = false
+        state.bindings.forEach((binding) => {
+          if (binding.faceSubscription || binding.faceChannelId) {
+            subscribeFace(binding)
+          }
+        })
       },
       () => {
-        stompConnected = false
-        stompClient = null
-        if (reconnectTimer) return
-        reconnectTimer = window.setTimeout(() => {
-          reconnectTimer = null
-          ensureFaceConnection()
-        }, 1500)
+        handleDisconnect('连接失败，重试中')
       }
     )
   }
 
   function subscribeFace(binding) {
-    if (!stompConnected || !stompClient) return
-    const topic = getBindingTopic(binding)
-    binding.faceSubscription = topic
-    subscribeTopic(topic)
+    if (!binding) return
+
+    const nextTopic = getBindingTopic(binding)
+    const prevTopic = binding.faceSubscription
+
+    if (prevTopic && prevTopic !== nextTopic) {
+      detachBindingFromTopic(binding, prevTopic)
+    }
+
+    binding.faceSubscription = nextTopic
+
+    if (!stompConnected || !stompClient) {
+      setBindingState(binding, { connected: false, statusText: '连接中' })
+      ensureFaceConnection()
+      return
+    }
+
+    subscribeTopic(nextTopic)
+    setBindingState(binding, { connected: true, statusText: '已连接，等待画面' })
+  }
+
+  function refreshFaceSubscription(bindingId) {
+    const binding = getBindingById(bindingId)
+    if (!binding) return
+    subscribeFace(binding)
   }
 
   function unsubscribeFace(bindingId) {
@@ -166,26 +251,14 @@ export function createFaceMonitor({ state, getBindingById, evaluateWarning }) {
     if (!binding?.faceSubscription) return
 
     const topic = binding.faceSubscription
-    binding.faceSubscription = null
-    if (getTopicBindings(topic).length) return
-
-    topicSubscriptions.get(topic)?.unsubscribe()
-    topicSubscriptions.delete(topic)
-
-    const topicState = topicStates.get(topic)
-    if (!topicState) return
-    if (topicState.animationFrameId) {
-      window.cancelAnimationFrame(topicState.animationFrameId)
-    }
-    if (topicState.timeoutId) {
-      window.clearTimeout(topicState.timeoutId)
-    }
-    topicStates.delete(topic)
+    detachBindingFromTopic(binding, topic)
+    setBindingState(binding, { connected: false, statusText: '未接入' })
   }
 
   return {
     ensureFaceConnection,
     subscribeFace,
+    refreshFaceSubscription,
     unsubscribeFace
   }
 }

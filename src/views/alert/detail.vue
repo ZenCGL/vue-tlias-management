@@ -17,6 +17,7 @@ const {
   setChartRef,
   startEeg,
   stopEeg,
+  refreshFaceSubscription,
   getWarningText,
   getAlertType
 } = useMonitorCenter()
@@ -112,7 +113,7 @@ function getFaceMetric(bindingValue, kind) {
           <el-input :model-value="binding.personType" disabled placeholder="自动带出" />
         </el-form-item>
         <el-form-item label="微表情通道">
-          <el-input v-model="binding.faceChannelId" />
+          <el-input v-model="binding.faceChannelId" @change="refreshFaceSubscription(binding.id)" />
         </el-form-item>
       </div>
 

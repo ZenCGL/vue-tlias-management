@@ -253,7 +253,9 @@ function addBinding() {
     ElMessage.warning('最多支持 4 个设备卡片')
     return
   }
-  state.bindings.push(createBinding(state.bindings.length + 1))
+  const binding = createBinding(state.bindings.length + 1)
+  state.bindings.push(binding)
+  faceMonitor.subscribeFace(binding)
 }
 
 function removeBinding(bindingId) {
@@ -346,6 +348,10 @@ function formatIndex(value) {
   return Number(value || 0).toFixed(1)
 }
 
+function refreshFaceSubscription(bindingId) {
+  faceMonitor.refreshFaceSubscription(bindingId)
+}
+
 function useMonitorCenterPage() {
   onMounted(async () => {
     await initMonitorCenter()
@@ -389,6 +395,7 @@ export function useMonitorCenter() {
     setBandChartRef: eegMonitor.setBandChartRef,
     startEeg: eegMonitor.startEeg,
     stopEeg: eegMonitor.stopEeg,
+    refreshFaceSubscription,
     getWarningLevel,
     getWarningText,
     getAlertType,
